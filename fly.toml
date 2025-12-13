@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for tesst on 2025-12-13T19:03:21Z
+# fly.toml app configuration file generated for tesst-3rg0pw on 2025-12-13T19:22:57Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'tesst'
+app = 'tesst-3rg0pw'
 primary_region = 'sin'
 
 [build]
