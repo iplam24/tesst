@@ -15,7 +15,9 @@ public class CorsConfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/**")
-                        .allowedOrigins("http://10.0.2.2:8080", "http://localhost:8080", "*") // cho phép emulator + localhost + mọi nơi
+                        .allowedOrigins("http://10.0.2.2:8080", "http://localhost:8080", "https://tesst-production-38e3.up.railway.app",
+                                "https://www.chayproject.online",              // Domain riêng
+                                "https://chayproject.online","*")
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                         .allowedHeaders("*")
                         .allowCredentials(false); // QUAN TRỌNG: ĐẶT FALSE!!!
