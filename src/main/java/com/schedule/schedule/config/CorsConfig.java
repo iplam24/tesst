@@ -18,7 +18,7 @@ public class CorsConfig {
                         .allowedOrigins("http://10.0.2.2:8080", "http://localhost:8080", "https://tesst-production-38e3.up.railway.app",
                                 "https://www.chayproject.online",              // Domain riêng
                                 "https://chayproject.online"
-                                ,"https://schedulefea.fly.dev","*")
+                                ,"https://schedulefeb.fly.dev","*")
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                         .allowedHeaders("*")
                         .allowCredentials(false); // QUAN TRỌNG: ĐẶT FALSE!!!
