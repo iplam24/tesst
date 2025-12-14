@@ -1,33 +1,19 @@
-# =========================
-# BUILD STAGE
-# =========================
-FROM maven:3.9.9-eclipse-temurin-21 AS build
+# Sử dụng Image chính thức từ Microsoft đã cài sẵn JDK và mọi thư viện trình duyệt
+FROM mcr.microsoft.com/playwright/java:v1.49.0-noble
 
+# Thiết lập thư mục làm việc
 WORKDIR /app
 
-# Copy pom trước để cache dependency
-COPY pom.xml .
-RUN mvn dependency:go-offline
+# Copy mã nguồn vào container
+COPY . .
 
-# Copy source code
-COPY src ./src
+# Build dự án bằng Maven (sử dụng wrapper đi kèm dự án)
+RUN ./mvnw clean package -DskipTests
 
-# Build jar
-RUN mvn clean package -DskipTests
-
-
-# =========================
-# RUN STAGE
-# =========================
-FROM eclipse-temurin:21-jre
-
-WORKDIR /app
-
-# Copy jar từ stage build
-COPY --from=build /app/target/*.jar app.jar
-
-# Expose port Spring Boot
+# Cấu hình biến môi trường
+ENV PORT=8080
 EXPOSE 8080
 
-# Run app
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# Chạy file jar sau khi build thành công
+# Lưu ý: Thay 'schedule-0.0.1-SNAPSHOT.jar' bằng tên file jar thực tế trong thư mục target của bạn
+CMD ["java", "-jar", "target/schedule-0.0.1-SNAPSHOT.jar"]

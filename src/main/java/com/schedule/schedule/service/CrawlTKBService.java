@@ -30,7 +30,15 @@ public class CrawlTKBService {
 
     public List<String> getAvailableSemesters(String mssv, String password) {
         try (Playwright pw = Playwright.create();
-             Browser browser = pw.webkit().launch(new BrowserType.LaunchOptions().setHeadless(true));
+             // Trong hàm crawl hoặc login
+             Browser browser = pw.chromium().launch(new BrowserType.LaunchOptions()
+                     .setHeadless(true) // Bắt buộc phải là true trên server
+                     .setArgs(List.of(
+                             "--no-sandbox",
+                             "--disable-setuid-sandbox",
+                             "--disable-dev-shm-usage",
+                             "--single-process" // Tùy chọn này giúp tiết kiệm RAM cực lớn
+                     )));
              Page page = browser.newPage()) {
 
             login(page, mssv, password);
@@ -59,7 +67,15 @@ public class CrawlTKBService {
 
     public CrawlResult crawlFinalData(String mssv, String password, String selectedSemester) {
         try (Playwright pw = Playwright.create();
-             Browser browser = pw.webkit().launch(new BrowserType.LaunchOptions().setHeadless(true));
+             // Trong hàm crawl hoặc login
+             Browser browser = pw.chromium().launch(new BrowserType.LaunchOptions()
+                     .setHeadless(true) // Bắt buộc phải là true trên server
+                     .setArgs(List.of(
+                             "--no-sandbox",
+                             "--disable-setuid-sandbox",
+                             "--disable-dev-shm-usage",
+                             "--single-process" // Tùy chọn này giúp tiết kiệm RAM cực lớn
+                     )));
              Page page = browser.newPage()) {
 
             login(page, mssv, password);
