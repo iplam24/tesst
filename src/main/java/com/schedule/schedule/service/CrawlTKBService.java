@@ -30,14 +30,18 @@ public class CrawlTKBService {
 
     public List<String> getAvailableSemesters(String mssv, String password) {
         try (Playwright pw = Playwright.create();
+
              // Trong hàm crawl hoặc login
+             // Sửa đoạn Browser browser = ...
              Browser browser = pw.chromium().launch(new BrowserType.LaunchOptions()
-                     .setHeadless(true) // Bắt buộc phải là true trên server
+                     .setHeadless(true) // Bắt buộc phải là true
                      .setArgs(List.of(
                              "--no-sandbox",
                              "--disable-setuid-sandbox",
-                             "--disable-dev-shm-usage",
-                             "--single-process" // Tùy chọn này giúp tiết kiệm RAM cực lớn
+                             "--disable-dev-shm-usage", // Sử dụng bộ nhớ thay vì file tạm /dev/shm
+                             "--disable-gpu",            // Tắt tăng tốc phần cứng
+                             "--single-process",         // Chạy trên 1 tiến trình duy nhất (tiết kiệm RAM)
+                             "--disable-extensions"      // Tắt các tiện ích mở rộng
                      )));
              Page page = browser.newPage()) {
 
@@ -68,13 +72,16 @@ public class CrawlTKBService {
     public CrawlResult crawlFinalData(String mssv, String password, String selectedSemester) {
         try (Playwright pw = Playwright.create();
              // Trong hàm crawl hoặc login
+             // Sửa đoạn Browser browser = ...
              Browser browser = pw.chromium().launch(new BrowserType.LaunchOptions()
-                     .setHeadless(true) // Bắt buộc phải là true trên server
+                     .setHeadless(true) // Bắt buộc phải là true
                      .setArgs(List.of(
                              "--no-sandbox",
                              "--disable-setuid-sandbox",
-                             "--disable-dev-shm-usage",
-                             "--single-process" // Tùy chọn này giúp tiết kiệm RAM cực lớn
+                             "--disable-dev-shm-usage", // Sử dụng bộ nhớ thay vì file tạm /dev/shm
+                             "--disable-gpu",            // Tắt tăng tốc phần cứng
+                             "--single-process",         // Chạy trên 1 tiến trình duy nhất (tiết kiệm RAM)
+                             "--disable-extensions"      // Tắt các tiện ích mở rộng
                      )));
              Page page = browser.newPage()) {
 
@@ -177,6 +184,7 @@ public class CrawlTKBService {
         page.fill("input[formcontrolname='username']", mssv);
         page.fill("input[formcontrolname='password']", password);
         page.keyboard().press("Enter");
+        page.setDefaultTimeout(60000);
         page.waitForSelector(".alert-danger, #WEB_TKB_1TUAN", new Page.WaitForSelectorOptions().setTimeout(15000));
         if (page.locator(".alert-danger").isVisible()) throw new RuntimeException("SAI_TAI_KHOAN");
     }
