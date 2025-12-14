@@ -19,7 +19,8 @@ public class CorsConfig {
                                 "https://www.chayproject.online",              // Domain riêng
                                 "https://chayproject.online"
                                 ,"https://schedulefeb.fly.dev",
-                                "https://schedulefevnua.fly.dev","*")
+                                "https://schedulefevnua.fly.dev",
+                                "https://schedulefevn.fly.dev","*")
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                         .allowedHeaders("*")
                         .allowCredentials(false); // QUAN TRỌNG: ĐẶT FALSE!!!
