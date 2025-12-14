@@ -7,6 +7,7 @@ import com.schedule.schedule.dto.CrawlResult;
 import com.schedule.schedule.entity.TimeTableDaily;
 import com.schedule.schedule.entity.TimeTableEntry;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -18,337 +19,300 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CrawlTKBService {
 
-    /**
-     * Login VNUA + lấy:
-     *  - Ngày bắt đầu học kỳ (ngày bắt đầu "Tuần 1")
-     *  - HTML TKB học kỳ (tab WEB_TKB_HK)
-     */
-    public CrawlResult crawlAll(String mssv, String password) {
-        Playwright pw = Playwright.create();
-        Browser browser = pw.chromium().launch(
-                new BrowserType.LaunchOptions()
-                        .setHeadless(true)
-                        .setChannel("chrome")
-                        .setSlowMo(350)
-        );
+    public List<String> getAvailableSemesters(String mssv, String password) {
+        try (Playwright pw = Playwright.create();
+             Browser browser = pw.webkit().launch(new BrowserType.LaunchOptions().setHeadless(true));
+             Page page = browser.newPage()) {
 
-        try {
-            Page page = browser.newPage();
+            login(page, mssv, password);
+            handleInitialPopup(page);
 
-            // 1. LOGIN
-            page.navigate("https://daotao.vnua.edu.vn/");
-            page.waitForSelector("input[formcontrolname='username']");
-
-            page.fill("input[formcontrolname='username']", mssv);
-            page.fill("input[formcontrolname='password']", password);
-            page.keyboard().press("Enter");
-
-
-            page.waitForLoadState(LoadState.DOMCONTENTLOADED,
-                    new Page.WaitForLoadStateOptions().setTimeout(15000));
-            page.waitForTimeout(2000);  // Thêm 2s để Angular render alert
-
-
-            Locator errorAlert = page.locator("div[role='alert'].alert.alert-danger");
-
-
-            int alertCount = errorAlert.count();
-            if (alertCount > 0) {
-                String alertText = errorAlert.first().innerText().trim();
-                System.out.println("PHÁT HIỆN ALERT LỖI: " + alertText + " (cho MSSV: " + mssv + ")");
-
-                if (alertText.contains("Đăng nhập không thành công")) {
-                    throw new RuntimeException("SAI_TAI_KHOAN_HOAC_MAT_KHAU");
-                } else {
-                    throw new RuntimeException("DANG_NHAP_LOI: " + alertText);
-                }
-            }
-
-            // 2. TKB TUẦN – LẤY TUẦN 1
             page.click("#WEB_TKB_1TUAN");
-            page.waitForTimeout(1200);
+            Locator dropdown = page.locator("ng-select[bindlabel='ten_hoc_ky'] .ng-select-container");
+            dropdown.waitFor();
+            dropdown.click();
 
-            page.waitForSelector("ng-select[bindlabel='thong_tin_tuan']",
-                    new Page.WaitForSelectorOptions().setTimeout(30000));
+            page.waitForCondition(() -> {
+                Locator options = page.locator(".ng-dropdown-panel .ng-option");
+                return options.count() > 0 && options.first().innerText().contains("Học kỳ");
+            }, new Page.WaitForConditionOptions().setTimeout(10000));
 
-            Locator weekDropdown = page.locator(
-                    "ng-select[bindlabel='thong_tin_tuan'] .ng-select-container"
-            );
-
-            // đợi dropdown sẵn sàng
-            weekDropdown.waitFor(new Locator.WaitForOptions().setTimeout(15000));
-
-            page.waitForTimeout(700);
-
-            // MỞ DROPDOWN CHẮC CHẮN
-            boolean opened = false;
-            for (int i = 0; i < 4; i++) {
-                try {
-                    weekDropdown.scrollIntoViewIfNeeded();
-                    weekDropdown.hover();
-                    page.waitForTimeout(250);
-
-                    weekDropdown.click(new Locator.ClickOptions().setForce(true));
-
-                    page.waitForSelector(".ng-dropdown-panel .ng-option",
-                            new Page.WaitForSelectorOptions().setTimeout(5000));
-
-                    if (page.locator(".ng-dropdown-panel").isVisible()) {
-                        opened = true;
-                        break;
-                    }
-
-                } catch (Exception e) {
-                    System.out.println("Retry mở dropdown tuần lần " + (i + 1));
-                    page.waitForTimeout(800);
-                }
-            }
-
-            if (!opened) throw new RuntimeException("KHONG_MO_DUOC_DROPDOWN_TUAN");
-
-            // Scroll lên đầu panel
-            Locator panel = page.locator(".ng-dropdown-panel .ng-dropdown-panel-items").first();
-            panel.evaluate("el => el.scrollTop = 0");
-            page.waitForTimeout(500);
-
-            String firstOptionText = page.locator(".ng-dropdown-panel .ng-option")
-                    .first()
-                    .innerText()
-                    .trim();
-
-            System.out.println("Option Tuần 1: " + firstOptionText);
-
-            Pattern pattern = Pattern.compile("từ ngày (\\d{2}/\\d{2}/\\d{4})");
-            Matcher matcher = pattern.matcher(firstOptionText);
-
-            if (!matcher.find()) {
-                throw new RuntimeException("KHONG_PARSE_DUOC_NGAY_BAT_DAU_TU_OPTION: " + firstOptionText);
-            }
-
-            LocalDate semesterStart = LocalDate.parse(matcher.group(1),
-                    DateTimeFormatter.ofPattern("dd/MM/yyyy"));
-
-            System.out.println(">>> Ngày bắt đầu học kỳ (Tuần 1): " + semesterStart);
-
-            // đóng dropdown
+            List<String> rawOptions = page.locator(".ng-dropdown-panel .ng-option").allInnerTexts();
             page.keyboard().press("Escape");
-            page.waitForTimeout(500);
 
-            // 3. VÀO TKB HỌC KỲ
-            page.click("#WEB_TKB_HK");
+            return rawOptions.stream()
+                    .map(this::extractSemester)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList();
+        }
+    }
+
+    public CrawlResult crawlFinalData(String mssv, String password, String selectedSemester) {
+        try (Playwright pw = Playwright.create();
+             Browser browser = pw.webkit().launch(new BrowserType.LaunchOptions().setHeadless(true));
+             Page page = browser.newPage()) {
+
+            login(page, mssv, password);
+            handleInitialPopup(page);
+
+            // --- BƯỚC 1: TKB TUẦN ---
+            page.click("#WEB_TKB_1TUAN");
             page.waitForTimeout(1500);
 
-            page.waitForSelector("#excel-table tbody tr",
-                    new Page.WaitForSelectorOptions().setTimeout(45000));
+            // A. Chọn đúng Học kỳ
+            Locator semesterDropdown = page.locator("ng-select[bindlabel='ten_hoc_ky'] .ng-select-container");
+            semesterDropdown.click();
+            page.locator(".ng-dropdown-panel .ng-option")
+                    .filter(new Locator.FilterOptions().setHasText(selectedSemester))
+                    .first()
+                    .click();
 
-            // lấy html
+            page.waitForLoadState(LoadState.NETWORKIDLE);
+            page.waitForTimeout(800);
+
+            // B. Mở dropdown Thông tin tuần
+            Locator weekDropdown = page.locator("ng-select[bindlabel='thong_tin_tuan'] .ng-select-container");
+            weekDropdown.click();
+
+            // C. Đợi panel tuần render xong
+            Locator weekPanel = page.locator(".ng-dropdown-panel-items.scroll-host");
+            weekPanel.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE));
+
+            // D. Scroll lên đầu (sử dụng mouse wheel để trigger virtual scroll)
+            for (int i = 0; i < 8; i++) {
+                weekPanel.hover();
+                page.mouse().wheel(0, -1000);
+                page.waitForTimeout(120);
+            }
+
+            // E. Lấy tuần đầu tiên sau khi scroll
+            Locator firstWeek = page.locator(".ng-dropdown-panel .ng-option").first();
+            String weekText = firstWeek.innerText();
+
+            // Đóng dropdown
+            page.keyboard().press("Escape");
+
+            // Parse ngày bắt đầu học kỳ từ tuần đầu
+            LocalDate semesterStart = parseDate(weekText);
+
+            System.out.println("Ngày đầu tiên của kì là: "+ semesterStart);
+
+            // --- BƯỚC 2: TKB HỌC KỲ ---
+// Click vào tab TKB Học kỳ
+            page.click("#WEB_TKB_HK", new Page.ClickOptions().setNoWaitAfter(true));
+            page.waitForTimeout(500);
+
+// Mở dropdown chọn học kỳ
+
+            Locator hkCombo = page.locator("ng-select[bindlabel=\"ten_hoc_ky\"] .ng-select-container");
+            hkCombo.click();
+
+
+// Đợi panel xuất hiện
+            page.waitForSelector(".ng-dropdown-panel .ng-option", new Page.WaitForSelectorOptions().setState(WaitForSelectorState.VISIBLE));
+
+// Click vào học kỳ mong muốn
+            page.locator(".ng-dropdown-panel .ng-option")
+                    .filter(new Locator.FilterOptions().setHasText(selectedSemester))
+                    .first()
+                    .click();
+
+            page.waitForTimeout(1000);
+
+// 1. Chờ bảng xuất hiện trong DOM
+            page.waitForSelector("#excel-table tbody tr", new Page.WaitForSelectorOptions().setTimeout(30000));
+
+// 2. Đợi thêm 1 nhịp để Angular hoàn tất đổ dữ liệu (Binding)
+// Đây là "bí kíp" để tránh bốc phải bảng trống hoặc bảng cũ
+            page.waitForTimeout(500);
+
+// 3. Kiểm tra trạng thái "Không tìm thấy dữ liệu"
+            Locator noDataMsg = page.locator("#excel-table tbody tr td[colspan='100']");
+
+            if (noDataMsg.isVisible() && noDataMsg.innerText().contains("Không tìm thấy dữ liệu")) {
+                System.out.println(">>> Kết quả: Học kỳ này thực sự không có lịch học.");
+                return new CrawlResult(semesterStart, null);
+            }
+
+// 4. Nếu không rỗng, lấy HTML từ #printArea (Đảm bảo chuẩn Element bạn gửi)
             String html = page.innerHTML("#printArea");
+            System.out.println(">>> Kết quả: Đã bốc thành công HTML Thời khóa biểu.");
 
             return new CrawlResult(semesterStart, html);
 
-        } catch (PlaywrightException e) {
-            throw new RuntimeException("CRAWL_FAILED: " + e.getMessage(), e);
-        } finally {
-            browser.close();
-            pw.close();
+        } catch (Exception e) {
+            throw new RuntimeException("Lỗi crawl chi tiết: " + e.getMessage(), e);
         }
     }
 
-    /**
-     * Parse HTML thành list TimeTableEntry
-     */
+
+    private void login(Page page, String mssv, String password) {
+        page.navigate("https://daotao.vnua.edu.vn/");
+        page.fill("input[formcontrolname='username']", mssv);
+        page.fill("input[formcontrolname='password']", password);
+        page.keyboard().press("Enter");
+        page.waitForSelector(".alert-danger, #WEB_TKB_1TUAN", new Page.WaitForSelectorOptions().setTimeout(15000));
+        if (page.locator(".alert-danger").isVisible()) throw new RuntimeException("SAI_TAI_KHOAN");
+    }
+
+    private void handleInitialPopup(Page page) {
+        try {
+            Locator closeBtn = page.locator("#btn_tb_close");
+            closeBtn.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(1500));
+            closeBtn.click();
+        } catch (Exception ignored) {}
+    }
+
+    private String extractSemester(String text) {
+        int index = text.indexOf("Học kỳ");
+        return (index != -1) ? text.substring(index).trim() : null;
+    }
+
+    private LocalDate parseDate(String text) {
+        Matcher m = Pattern.compile("(\\d{2}/\\d{2}/\\d{4})").matcher(text);
+        if (m.find()) return LocalDate.parse(m.group(1), DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+        throw new RuntimeException("Lỗi parse ngày");
+    }
+
     public List<TimeTableEntry> parseHtmlToEntries(String html, String mssv) {
         List<TimeTableEntry> result = new ArrayList<>();
-        LocalDateTime now = LocalDateTime.now();
+        if (html == null || html.isBlank()) return result;
 
         Document doc = Jsoup.parse(html);
         Element table = doc.selectFirst("table#excel-table");
-
-        if (table == null) {
-            return result;
-        }
+        if (table == null) return result;
 
         Elements rows = table.select("tbody > tr");
 
-        // lưu các giá trị rowspan
-        String maMon = null;
-        String tenMon = null;
-        Integer nhom = null;
-        Integer toNhom = null;
-        Integer soTinChi = null;
-        Integer soTietLT = null;
-        Integer soTietTH = null;
-        String lop = null;
+        // Khởi tạo các biến nhớ để xử lý rowspan
+        String currentMaMon = "", currentTenMon = "", currentLop = "";
+        Integer currentNhom = null, currentToNhom = null, currentTinChi = null;
 
         for (Element row : rows) {
             Elements cols = row.select("td");
-            if (cols.isEmpty()) continue;
 
-            boolean isFirstRow = !cols.get(0).attr("rowspan").isEmpty();
+            // BỎ QUA các dòng không có dữ liệu hoặc dòng thông báo rỗng
+            if (cols.isEmpty() || cols.get(0).text().contains("Không tìm thấy dữ liệu")) {
+                continue;
+            }
 
-            if (isFirstRow) {
-                // ===== dòng đầu môn học =====
-                maMon = text(cols, 0);
-                tenMon = text(cols, 1);
+            // KIỂM TRA DÒNG GỐC (Dòng có chứa Mã môn học - thường có rowspan)
+            if (!cols.get(0).attr("rowspan").isEmpty()) {
+                if (cols.size() < 13) continue; // Đảm bảo đủ số cột tối thiểu cho dòng chính
 
-                Integer[] nt = parseNhomTo(text(cols, 2));
-                nhom = nt[0];
-                toNhom = nt[1];
+                currentMaMon = cols.get(0).text().trim();
+                currentTenMon = cols.get(1).text().trim();
 
-                soTinChi = parseIntSafe(text(cols, 3));
-                soTietLT = parseIntSafe(text(cols, 4));
-                soTietTH = parseIntSafe(text(cols, 5));
-                lop = text(cols, 6);
-
-                Integer thu = parseThu(text(cols, 8));
-                Integer tietBD = parseIntSafe(text(cols, 9));
-                Integer soTiet = parseIntSafe(text(cols, 10));
-                String phong = text(cols, 11);
-                String gv = text(cols, 12);
-                String chuoiTuan = text(cols, 13);
-
-                if (thu != null && tietBD != null) {
-                    result.add(TimeTableEntry.builder()
-                            .mssv(mssv)
-                            .maMon(maMon)
-                            .tenMon(tenMon)
-                            .nhom(nhom)
-                            .toNhom(toNhom)
-                            .soTinChi(soTinChi)
-                            .soTietLT(soTietLT)
-                            .soTietTH(soTietTH)
-                            .lop(lop)
-                            .thu(thu)
-                            .tietBatDau(tietBD)
-                            .soTiet(soTiet)
-                            .phong(phong)
-                            .giangVien(gv)
-                            .chuoiTuan(chuoiTuan)
-                            .lastUpdated(now)
-                            .build()
-                    );
+                // Xử lý Nhóm tổ (ví dụ: 02-02)
+                String nhomToText = cols.get(2).text().trim();
+                if (nhomToText.contains("-")) {
+                    String[] nt = nhomToText.split("-");
+                    currentNhom = parseIntSafe(nt[0]);
+                    currentToNhom = nt.length > 1 ? parseIntSafe(nt[1]) : null;
+                } else {
+                    currentNhom = parseIntSafe(nhomToText);
+                    currentToNhom = null;
                 }
 
-            } else {
-                // ===== các dòng tiếp theo =====
-                if (maMon == null) continue;
+                currentTinChi = parseIntSafe(cols.get(3).text());
+                currentLop = cols.get(6).text().trim();
 
-                Integer thu = parseThu(text(cols, 0));
-                Integer tietBD = parseIntSafe(text(cols, 1));
-                Integer soTiet = parseIntSafe(text(cols, 2));
-                String phong = text(cols, 3);
-                String gv = text(cols, 4);
-                String chuoiTuan = text(cols, 5);
-
-                if (thu != null && tietBD != null) {
-                    result.add(TimeTableEntry.builder()
-                            .mssv(mssv)
-                            .maMon(maMon)
-                            .tenMon(tenMon)
-                            .nhom(nhom)
-                            .toNhom(toNhom)
-                            .soTinChi(soTinChi)
-                            .soTietLT(soTietLT)
-                            .soTietTH(soTietTH)
-                            .lop(lop)
-                            .thu(thu)
-                            .tietBatDau(tietBD)
-                            .soTiet(soTiet)
-                            .phong(phong)
-                            .giangVien(gv)
-                            .chuoiTuan(chuoiTuan)
-                            .lastUpdated(now)
-                            .build()
-                    );
+                // Cột dữ liệu thời gian bắt đầu từ index 8 cho dòng chính
+                addEntrySafe(result, mssv, currentMaMon, currentTenMon, currentNhom, currentToNhom, currentTinChi, currentLop, cols, 8);
+            }
+            // KIỂM TRA DÒNG PHỤ (Dòng con của rowspan - không có các cột đầu)
+            else {
+                // Dòng phụ thường bắt đầu ngay bằng Thứ (Index 0), Tiết (Index 1)...
+                // Cần tối thiểu 6 cột (Thứ, Tiết BD, Số tiết, Phòng, GV, Tuần)
+                if (cols.size() >= 6) {
+                    addEntrySafe(result, mssv, currentMaMon, currentTenMon, currentNhom, currentToNhom, currentTinChi, currentLop, cols, 0);
                 }
             }
         }
-
         return result;
     }
 
-    // Helpers
-    private String text(Elements c, int i) {
-        return c.size() > i ? c.get(i).text().trim() : "";
-    }
+    private void addEntrySafe(List<TimeTableEntry> list, String mssv, String ma, String ten, Integer n, Integer t, Integer tc, String l, Elements cols, int offset) {
+        // Kiểm tra an toàn: offset + 5 là cột cuối cùng cần lấy (Chuỗi tuần)
+        if (cols.size() <= offset + 5) return;
 
-    private Integer parseIntSafe(String s) {
         try {
-            return (s == null || s.isBlank()) ? null : Integer.parseInt(s.trim());
-        } catch (Exception e) {
-            return null;
+            Integer thu = parseThu(cols.get(offset).text().trim());
+            Integer tietBD = parseIntSafe(cols.get(offset + 1).text().trim());
+            Integer soTiet = parseIntSafe(cols.get(offset + 2).text().trim());
+            String phong = cols.get(offset + 3).text().trim();
+            String gv = cols.get(offset + 4).text().trim();
+            String chuoiTuan = cols.get(offset + 5).text().trim();
+
+            if (thu != null && tietBD != null) {
+                list.add(TimeTableEntry.builder()
+                        .mssv(mssv).maMon(ma).tenMon(ten).nhom(n).toNhom(t).soTinChi(tc).lop(l)
+                        .thu(thu).tietBatDau(tietBD).soTiet(soTiet)
+                        .phong(phong).giangVien(gv).chuoiTuan(chuoiTuan)
+                        .lastUpdated(LocalDateTime.now()).build());
+            }
+        } catch (Exception ex) {
+            log.warn("Bỏ qua 1 dòng do lỗi parse dữ liệu: {}", ex.getMessage());
         }
+    }
+    private Integer parseIntSafe(String s) {
+        try { return Integer.parseInt(s.trim()); } catch (Exception e) { return null; }
     }
 
     private Integer parseThu(String s) {
         if (s == null || s.isBlank()) return null;
         if (s.equalsIgnoreCase("CN")) return 8;
-        try {
-            return Integer.parseInt(s.trim());
-        } catch (Exception e) {
-            return null;
-        }
+        return parseIntSafe(s);
     }
 
-    private Integer[] parseNhomTo(String str) {
-        if (str == null || str.isBlank()) return new Integer[]{null, null};
-        String[] p = str.split("-");
-        Integer a = null, b = null;
-        try {
-            if (p.length > 0) a = Integer.parseInt(p[0].trim());
-        } catch (Exception ignored) {}
-        try {
-            if (p.length > 1) b = Integer.parseInt(p[1].trim());
-        } catch (Exception ignored) {}
-        return new Integer[]{a, b};
-    }
-
-    public List<TimeTableDaily> expandToDaily(
-            List<TimeTableEntry> entries,
-            LocalDate semesterStart
-    ) {
+    public List<TimeTableDaily> expandToDaily(List<TimeTableEntry> entries, LocalDate semesterStart) {
         List<TimeTableDaily> result = new ArrayList<>();
 
         for (TimeTableEntry e : entries) {
             String weeks = e.getChuoiTuan();
-            if (weeks == null) continue;
+            if (weeks == null || weeks.isEmpty()) continue;
 
             for (int i = 0; i < weeks.length(); i++) {
                 char c = weeks.charAt(i);
-                if (c < '1' || c > '9') continue;
+                // Nếu tại vị trí i là con số (tuần đó có học)
+                if (Character.isDigit(c)) {
+                    int weekIndex = i + 1; // Tuần thứ mấy
 
-                int weekIndex = i + 1;
+                    // Ngày thứ 2 của tuần đó = Ngày bắt đầu kỳ + (số tuần - 1)
+                    LocalDate mondayOfWeek = semesterStart.plusWeeks(weekIndex - 1);
+                    // Ngày học thực tế = Thứ 2 + (Thứ trong tuần - 2)
+                    // (Ví dụ: Thứ 3 thì cộng thêm 1 ngày vào Thứ 2)
+                    LocalDate date = mondayOfWeek.plusDays(e.getThu() - 2);
 
-                LocalDate monday = semesterStart.plusWeeks(weekIndex - 1);
-                LocalDate date = monday.plusDays(e.getThu() - 2);
-
-                result.add(TimeTableDaily.builder()
-                        .mssv(e.getMssv())
-                        .maMon(e.getMaMon())
-                        .tenMon(e.getTenMon())
-                        .nhom(e.getNhom())
-                        .toNhom(e.getToNhom())
-                        .soTinChi(e.getSoTinChi())
-                        .lop(e.getLop())
-                        .thu(e.getThu())
-                        .tietBatDau(e.getTietBatDau())
-                        .soTiet(e.getSoTiet())
-                        .phong(e.getPhong())
-                        .giangVien(e.getGiangVien())
-                        .tuanSo(weekIndex)
-                        .date(date)
-                        .build());
+                    result.add(TimeTableDaily.builder()
+                            .mssv(e.getMssv())
+                            .maMon(e.getMaMon())
+                            .tenMon(e.getTenMon())
+                            .nhom(e.getNhom())
+                            .toNhom(e.getToNhom())
+                            .soTinChi(e.getSoTinChi())
+                            .lop(e.getLop())
+                            .thu(e.getThu())
+                            .tietBatDau(e.getTietBatDau())
+                            .soTiet(e.getSoTiet())
+                            .phong(e.getPhong())
+                            .giangVien(e.getGiangVien())
+                            .tuanSo(weekIndex)
+                            .date(date)
+                            .build());
+                }
             }
         }
-
         return result;
     }
-
 }

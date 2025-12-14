@@ -1,16 +1,19 @@
 package com.schedule.schedule.service;
 
 import com.schedule.schedule.dto.CrawlResult;
-import com.schedule.schedule.dto.TimeTableEntryDTO;
+import com.schedule.schedule.dto.RefreshResponse;
 import com.schedule.schedule.entity.TimeTableDaily;
 import com.schedule.schedule.entity.TimeTableEntry;
-import com.schedule.schedule.mapper.TimeTableMapper;
+import com.schedule.schedule.entity.UserCrawl;
 import com.schedule.schedule.repository.TimeTableDailyRepository;
 import com.schedule.schedule.repository.TimetableEntryRepository;
+import com.schedule.schedule.repository.UserCrawlRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -19,63 +22,44 @@ public class TimetableService {
 
     private final TimetableEntryRepository entryRepo;
     private final TimeTableDailyRepository dailyRepo;
+    private final UserCrawlRepository userCrawlRepo;
     private final CrawlTKBService crawlTKBService;
 
-    /**
-     * GET từ DB
-     */
-    public List<TimeTableEntry> getFromCache(String mssv) {
-        return entryRepo.findByMssvOrderByThuAscTietBatDauAsc(mssv);
+    public List<String> getSemesters(String mssv, String password) {
+        // Lưu/Cập nhật mật khẩu để API Refresh lấy ra dùng ngầm
+        userCrawlRepo.save(new UserCrawl(mssv, password, LocalDateTime.now()));
+        return crawlTKBService.getAvailableSemesters(mssv, password);
     }
 
-    /**
-     * Gọi FE
-     */
-    public List<TimeTableEntryDTO> getByMssv(String mssv) {
-        return entryRepo.findByMssv(mssv)
-                .stream()
-                .map(TimeTableMapper::toDTO)
-                .toList();
+    @Transactional
+    public RefreshResponse refreshFromWeb(String mssv, String selectedSemester) {
+        // 1. Lấy mật khẩu từ DB
+        UserCrawl user = userCrawlRepo.findById(mssv)
+                .orElseThrow(() -> new RuntimeException("Vui lòng đăng nhập lại!"));
+
+        // 2. Gọi crawl (Hàm này đã trả về CrawlResult chứa cả ngày và html)
+        CrawlResult result = crawlTKBService.crawlFinalData(mssv, user.getPassword(), selectedSemester);
+
+        if (result.html() == null) {
+            dailyRepo.deleteByMssv(mssv);
+            entryRepo.deleteByMssv(mssv);
+            return new RefreshResponse(result.semesterStart(), new ArrayList<>());
+        }
+
+        // 3. Parse và lưu trữ
+        List<TimeTableEntry> entries = crawlTKBService.parseHtmlToEntries(result.html(), mssv);
+        dailyRepo.deleteByMssv(mssv);
+        entryRepo.deleteByMssv(mssv);
+        entryRepo.saveAll(entries);
+
+        List<TimeTableDaily> dailyList = crawlTKBService.expandToDaily(entries, result.semesterStart());
+        List<TimeTableDaily> savedDaily = dailyRepo.saveAll(dailyList);
+
+        // TRẢ VỀ ĐỐI TƯỢNG MỚI CHỨA NGÀY BẮT ĐẦU
+        return new RefreshResponse(result.semesterStart(), savedDaily);
     }
 
     public List<TimeTableDaily> getDailyFromCache(String mssv) {
         return dailyRepo.findByMssv(mssv);
-        // nếu anh có method sort sẵn thì dùng:
-        // return dailyRepo.findByMssvOrderByNgayHocAscThuAscTietBatDauAsc(mssv);
-    }
-
-
-    /**
-     * CRAWL FULL:
-     * - login đúng 1 lần
-     * - lấy ngày bắt đầu kỳ
-     * - lấy tkb học kỳ
-     * - parse entry
-     * - expand daily
-     * - lưu DB
-     */
-    @Transactional
-    public List<TimeTableDaily> refreshFromWeb(String mssv, String password) {
-
-        // 1. Crawl 1 phát ra cả ngày bắt đầu + html
-        CrawlResult result = crawlTKBService.crawlAll(mssv, password);
-
-        // 2. Parse entry
-        List<TimeTableEntry> entries =
-                crawlTKBService.parseHtmlToEntries(result.html(), mssv);
-
-        // 3. Xoá dữ liệu cũ
-        dailyRepo.deleteByMssv(mssv);
-        entryRepo.deleteByMssv(mssv);
-
-        // 4. Lưu entry gốc
-        entryRepo.saveAll(entries);
-
-        // 5. Sinh daily từ tuần → ngày cụ thể
-        List<TimeTableDaily> daily =
-                crawlTKBService.expandToDaily(entries, result.semesterStart());
-
-        // 6. Lưu daily
-        return dailyRepo.saveAll(daily);
     }
 }
